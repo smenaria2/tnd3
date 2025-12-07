@@ -1,0 +1,8 @@
+{
+  "name": "Truth and Dare - Couples Game",
+  "description": "A private, peer-to-peer Truth or Dare game for couples featuring real-time connection, media challenges, and intimacy levels.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

@@ -16,17 +16,21 @@ interface UseP2PProps {
 const MESSAGE_QUEUE_KEY = 'p2p_message_queue';
 
 export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, isTestMode }: UseP2PProps) {
-  const [status, setStatus] = useState<'idle' | 'initializing' | 'connected' | 'error'>('idle'); // Removed 'waiting' state from here
+  const [status, setStatus] = useState<'idle' | 'initializing' | 'connected' | 'error'>('idle');
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
   const [error, setError] = useState<string | null>(null);
-  const [retryTrigger, setRetryTrigger] = useState(0); // Used to re-run effect
+  const [retryTrigger, setRetryTrigger] = useState(0); 
   
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const mountedRef = useRef(false);
   const onIncomingCallRef = useRef(onIncomingCall);
   const onMessageRef = useRef(onMessage);
-  const initialConnectionAttempt = useRef(true); // Track if this is the very first connection attempt
+  const retryCountRef = useRef(0);
+  
+  // Track specific retries for unavailable ID to avoid infinite loops
+  const unavailableIdRetries = useRef(0);
+  const MAX_UNAVAILABLE_RETRIES = 5;
 
   // Update refs when props change
   useEffect(() => {
@@ -37,7 +41,6 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
     onMessageRef.current = onMessage;
   }, [onMessage]);
 
-  // Function to store messages in a queue
   const enqueueMessage = useCallback((msg: P2PMessage) => {
     try {
       const queue = JSON.parse(localStorage.getItem(MESSAGE_QUEUE_KEY) || '[]');
@@ -48,15 +51,13 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
     }
   }, []);
 
-  // Function to send all queued messages
   const sendQueuedMessages = useCallback(() => {
     if (connRef.current && connRef.current.open) {
       try {
         const queue: P2PMessage[] = JSON.parse(localStorage.getItem(MESSAGE_QUEUE_KEY) || '[]');
         if (queue.length > 0) {
-          console.log(`Sending ${queue.length} queued messages.`);
           queue.forEach(msg => connRef.current?.send(msg));
-          localStorage.removeItem(MESSAGE_QUEUE_KEY); // Clear queue after sending
+          localStorage.removeItem(MESSAGE_QUEUE_KEY);
         }
       } catch (e) {
         console.error("Failed to send queued messages:", e);
@@ -64,11 +65,9 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
     }
   }, []);
 
-  // Helper to safely send data
   const sendMessage = useCallback((msg: P2PMessage) => {
     if (isTestMode) {
       if (onMessageRef.current) {
-        // Simulate network delay for test mode
         setTimeout(() => onMessageRef.current!(msg), 50);
       }
       return;
@@ -77,14 +76,12 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
     if (connRef.current && connRef.current.open) {
       connRef.current.send(msg);
     } else {
-      console.warn("Connection not open, enqueuing message:", msg.type);
       enqueueMessage(msg);
     }
   }, [isTestMode, enqueueMessage]);
 
   const callPeer = useCallback((stream: MediaStream) => {
     if (connRef.current && peerRef.current) {
-       // Call the peer we are connected to via data channel
        return peerRef.current.call(connRef.current.peer, stream);
     }
     return null;
@@ -93,12 +90,13 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
   const retry = useCallback(() => {
     setStatus('idle');
     setError(null);
-    initialConnectionAttempt.current = true; // Reset for a full retry
+    unavailableIdRetries.current = 0;
     setRetryTrigger(prev => prev + 1);
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
+    let initTimeout: ReturnType<typeof setTimeout>;
 
     if (isTestMode) {
       setStatus('connected');
@@ -108,36 +106,43 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
 
     const initPeer = async () => {
       setStatus('initializing');
-      setConnectionStatus('reconnecting'); // Assume reconnecting until proven otherwise
+      setConnectionStatus('reconnecting');
       
       const PeerJS = (await import('peerjs')).default;
+
+      // Force cleanup of any lingering instance
+      if (peerRef.current) {
+        if (!peerRef.current.destroyed) peerRef.current.destroy();
+        peerRef.current = null;
+      }
 
       // Host Peer ID is fixed, Guest Peer ID is random
       const peerId = role === 'host' 
         ? `tod-game-${gameCode.toLowerCase()}` 
-        : `tod-guest-${gameCode.toLowerCase()}-${Math.random().toString(36).substr(2, 5)}`;
+        : `tod-guest-${gameCode.toLowerCase()}-${Math.random().toString(36).substr(2, 6)}`;
+
+      console.log(`[P2P] Initializing Peer with ID: ${peerId}`);
 
       const peer = new PeerJS(peerId, {
         config: { iceServers: STUN_SERVERS },
-        debug: 1, // 0 = off, 1 = error, 2 = warn, 3 = info, 4 = debug
+        debug: 1, 
       });
 
       peerRef.current = peer;
 
       peer.on('open', (id) => {
-        console.log(`My Peer ID: ${id}`);
-        setStatus('connected'); // PeerJS connection open, ready to connect to peer
+        console.log(`[P2P] Peer Open. ID: ${id}`);
+        unavailableIdRetries.current = 0; // Reset retry counter on success
+        setStatus('connected');
         if (role === 'guest') {
           connectToHost(peer);
         }
-        // Host will wait for incoming connection or for GameRoom to initiate a state sync
       });
 
       peer.on('connection', (conn) => {
         if (role === 'host') {
           handleConnection(conn);
         } else {
-          // Should not happen for guest, only one connection
           conn.close();
         }
       });
@@ -149,96 +154,101 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
       });
 
       peer.on('error', (err: any) => {
-        console.error('Peer error:', err);
+        console.warn('[P2P] Peer Error:', err.type, err.message);
         if (!mountedRef.current) return;
 
         if (err.type === 'unavailable-id') {
            if (role === 'host') {
-             // For host, a taken ID means either another instance is active or a stale session.
-             // Automatic retry with the same ID is not effective here.
-             setError("Game session active in another tab or the ID is taken. Please wait a moment or try creating a new game.");
-             setStatus('error');
-             setConnectionStatus('disconnected');
-           } else { // guest unavailable-id (shouldn't happen often, guest IDs are random)
-             setError("Cannot connect: Guest ID unavailable. This is unusual, please retry.");
-             setStatus('error');
-             setConnectionStatus('disconnected');
-           }
-        } else if (err.type === 'peer-unavailable') {
-           // For guest, if host is unavailable on initial connect (and not yet connected)
-           if (role === 'guest' && initialConnectionAttempt.current) { 
-             setError("Game not found. Check the code or host might not be ready.");
-             setStatus('error');
-             setConnectionStatus('disconnected');
-           } else { // Peer became unavailable during game, or host tried to connect to guest
-             console.warn("Peer unavailable during game, attempting reconnect...");
-             setConnectionStatus('reconnecting');
-             // Trigger a full re-initialization to ensure a clean slate
-             if (peerRef.current && !peerRef.current.destroyed) {
-               peerRef.current.destroy();
-               peerRef.current = null;
+             // If ID is taken, it's likely a zombie connection from refresh.
+             if (unavailableIdRetries.current < MAX_UNAVAILABLE_RETRIES) {
+                unavailableIdRetries.current++;
+                console.log(`[P2P] Host ID unavailable. Retrying in 2s... (${unavailableIdRetries.current}/${MAX_UNAVAILABLE_RETRIES})`);
+                setStatus('initializing'); 
+                // Don't set 'error' status yet, just silently retry
+                if (peerRef.current) peerRef.current.destroy();
+                initTimeout = setTimeout(() => {
+                   if (mountedRef.current) setRetryTrigger(prev => prev + 1);
+                }, 2000);
+             } else {
+                setError("Game session active in another tab or ID stuck. Please wait a moment or create a new game.");
+                setStatus('error');
              }
+           } else {
+             // Guest ID collision (rare), retry immediately with new random ID
              setRetryTrigger(prev => prev + 1);
            }
-        } else if (err.type === 'disconnected' || err.type === 'network') {
-           console.warn(`Peer ${err.type} error, attempting full re-initialization...`);
-           setConnectionStatus('reconnecting');
-           if (peerRef.current && !peerRef.current.destroyed) {
-             peerRef.current.destroy(); // Destroy current peer
-             peerRef.current = null;
+        } else if (err.type === 'peer-unavailable') {
+           if (role === 'guest') {
+             // Host not online yet or ID mismatch
+             console.log("[P2P] Host unavailable, will retry connecting...");
+             setConnectionStatus('reconnecting');
+             // Try to connect again in a few seconds without destroying peer
+             setTimeout(() => {
+               if (mountedRef.current && peerRef.current && !peerRef.current.destroyed && !connRef.current?.open) {
+                 connectToHost(peerRef.current);
+               }
+             }, 3000);
            }
-           setRetryTrigger(prev => prev + 1); // Trigger new initPeer()
+        } else if (err.type === 'disconnected' || err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'socket-closed') {
+           console.log("[P2P] Network error. Attempting reconnect...");
+           setConnectionStatus('reconnecting');
+           // Attempt PeerJS reconnect
+           if (peer && !peer.destroyed && !peer.disconnected) return; // False alarm
+           
+           if (peer && !peer.destroyed) {
+               peer.reconnect();
+           } else {
+               // Full restart needed
+               initTimeout = setTimeout(() => setRetryTrigger(prev => prev + 1), 2000);
+           }
         }
         else {
-          setError("Connection error: " + err.type);
+          // Other errors
+          setError(`Connection error: ${err.type}`);
           setStatus('error');
-          setConnectionStatus('disconnected');
         }
       });
 
       peer.on('disconnected', () => {
-        console.warn("PeerJS disconnected. Will attempt to re-establish connection.");
-        // PeerJS often tries to auto-reconnect. We'll rely on the 'error' handler for 'disconnected' type
-        // or the general mechanism to trigger a full re-initialization if connection isn't restored.
-        setConnectionStatus('reconnecting');
+        console.warn("[P2P] Disconnected from signaling server.");
+        if (role === 'host' && !peer.destroyed) {
+            // Host should always try to stay connected
+            setTimeout(() => {
+               if(mountedRef.current && !peer.destroyed) peer.reconnect();
+            }, 1000);
+        }
       });
     };
 
     const connectToHost = (peer: Peer) => {
       const hostId = `tod-game-${gameCode.toLowerCase()}`;
-      console.log(`Guest connecting to host: ${hostId}`);
-      // Only connect if not already connected to this host, or if connection is closed/null
       if (!connRef.current || connRef.current.peer !== hostId || !connRef.current.open) {
-        // If connRef.current is a *different* peer or closed, create a new connection
+        console.log(`[P2P] Guest connecting to host: ${hostId}`);
         const conn = peer.connect(hostId, { reliable: true });
         handleConnection(conn);
       }
     };
 
     const handleConnection = (conn: DataConnection) => {
-      // If host, check if already connected to someone else and close the new connection
       if (role === 'host' && connRef.current && connRef.current.open && connRef.current.peer !== conn.peer) {
-        console.warn("Host already has an open connection, closing new one.");
-        conn.close();
+        conn.close(); // Host only accepts one guest
         return;
       }
       
-      // If we already have an open connection to this specific peer, don't re-handle.
-      if (connRef.current && connRef.current.open && connRef.current.peer === conn.peer) {
-        return; 
-      }
+      // Prevent duplicate handlers on same connection object
+      if (connRef.current === conn) return;
 
       connRef.current = conn;
 
       conn.on('open', () => {
-        console.log("Data connection opened!");
+        console.log("[P2P] Data connection established!");
         setConnectionStatus('connected');
-        initialConnectionAttempt.current = false; // Connection established, no longer initial attempt
+        unavailableIdRetries.current = 0;
         sendMessage({ 
           type: 'PLAYER_INFO', 
           payload: { name: playerName, role } 
         });
-        sendQueuedMessages(); // Send any messages queued while disconnected
+        sendQueuedMessages();
       });
 
       conn.on('data', (data: any) => {
@@ -248,47 +258,46 @@ export function useP2P({ role, gameCode, playerName, onMessage, onIncomingCall, 
       });
 
       conn.on('close', () => {
-        console.log("Data connection closed.");
+        console.log("[P2P] Data connection closed.");
         connRef.current = null;
         if (mountedRef.current) {
           setConnectionStatus('disconnected');
-          // If connection closed, and PeerJS itself is still alive, try to reconnect
-          if (peerRef.current && !peerRef.current.destroyed) {
-            // If guest, try to connect to host again.
-            if (role === 'guest') {
-              setTimeout(() => { // Give a small delay before attempting reconnect
-                if (mountedRef.current && connectionStatus !== 'connected') { // Only try if not reconnected already
-                  connectToHost(peerRef.current!);
-                }
-              }, 1000);
-            }
+          // If guest, try to reconnect to host
+          if (role === 'guest' && peerRef.current && !peerRef.current.destroyed) {
+             setTimeout(() => {
+                 if (mountedRef.current && connectionStatus !== 'connected') {
+                     connectToHost(peerRef.current!);
+                 }
+             }, 2000);
           }
         }
       });
 
       conn.on('error', (err) => {
-        console.error("Data connection error:", err);
+        console.error("[P2P] Data connection error:", err);
         if (mountedRef.current) {
-          setConnectionStatus('disconnected');
-          // If a data connection error occurs, trigger a full peer re-initialization to recover
-          if (peerRef.current && !peerRef.current.destroyed) {
-            peerRef.current.destroy();
-            peerRef.current = null;
-          }
-          setRetryTrigger(prev => prev + 1);
+             connRef.current = null;
+             setConnectionStatus('disconnected');
+             // If connection errors out, try to create a new one
+             if (role === 'guest' && peerRef.current && !peerRef.current.destroyed) {
+                 setTimeout(() => connectToHost(peerRef.current!), 2000);
+             }
         }
       });
     };
 
-    initPeer();
+    // Delay initialization slightly to handle React Strict Mode double-mount
+    // and ensure previous peer destruction has propagated
+    initTimeout = setTimeout(initPeer, 500);
 
     return () => {
       mountedRef.current = false;
+      clearTimeout(initTimeout);
       connRef.current?.close();
       peerRef.current?.destroy();
-      localStorage.removeItem(MESSAGE_QUEUE_KEY); // Clear queue on exit
+      localStorage.removeItem(MESSAGE_QUEUE_KEY);
     };
-  }, [role, gameCode, playerName, isTestMode, retryTrigger, sendMessage, sendQueuedMessages, connectionStatus]);
+  }, [role, gameCode, playerName, isTestMode, retryTrigger, sendMessage, sendQueuedMessages]);
 
   return { status, connectionStatus, error, sendMessage, callPeer, retry };
 }

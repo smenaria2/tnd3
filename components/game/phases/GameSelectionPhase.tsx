@@ -15,30 +15,35 @@ export const GameSelectionPhase: React.FC<GameSelectionPhaseProps> = ({ onStartT
   const getDareScore = () => calculateScoreValue('dare', turnHistory, role);
 
   return (
-    <div className="grid grid-cols-2 gap-4 h-64 animate-fade-in">
+    <div className="flex gap-3 w-full max-w-md animate-slide-in-right">
       <Button 
         onClick={() => onStartTurn('truth')}
-        className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-400 to-blue-600 p-6 text-white shadow-lg transition-transform active:scale-95 flex flex-col justify-center items-center"
+        className="flex-1 group relative overflow-hidden rounded-xl bg-gradient-to-r from-blue-400 to-blue-500 p-3 text-white shadow-md transition-transform active:scale-95 flex items-center justify-between"
         aria-label="Choose Truth"
       >
-        <div className="absolute top-2 right-2 bg-white/20 px-2 py-0.5 rounded text-xs font-bold">
-           +{getTruthScore()} pts
+        <div className="flex items-center gap-2">
+            <span className="text-xl" role="img" aria-label="Diamond emoji">💎</span>
+            <div className="text-left">
+                <h3 className="text-sm font-bold leading-none">TRUTH</h3>
+                <span className="text-[9px] opacity-80">Honesty pays</span>
+            </div>
         </div>
-        <span className="text-4xl mb-2" role="img" aria-label="Diamond emoji">💎</span>
-        <h3 className="text-2xl font-bold">TRUTH</h3>
-        <p className="text-blue-100 text-[10px] mt-2 text-center leading-tight">Lower reward for repetition.</p>
+        <div className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-bold">+{getTruthScore()}</div>
       </Button>
+      
       <Button 
         onClick={() => onStartTurn('dare')}
-        className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 p-6 text-white shadow-lg transition-transform active:scale-95 flex flex-col justify-center items-center"
+        className="flex-1 group relative overflow-hidden rounded-xl bg-gradient-to-r from-orange-400 to-orange-500 p-3 text-white shadow-md transition-transform active:scale-95 flex items-center justify-between"
         aria-label="Choose Dare"
       >
-         <div className="absolute top-2 right-2 bg-white/20 px-2 py-0.5 rounded text-xs font-bold">
-           +{getDareScore()} pts
-         </div>
-         <span className="text-4xl mb-2" role="img" aria-label="Fire emoji">🔥</span>
-        <h3 className="text-2xl font-bold">DARE</h3>
-        <p className="text-orange-100 text-[10px] mt-2 text-center leading-tight">Bonus for dare streak!</p>
+         <div className="flex items-center gap-2">
+            <span className="text-xl" role="img" aria-label="Fire emoji">🔥</span>
+            <div className="text-left">
+                <h3 className="text-sm font-bold leading-none">DARE</h3>
+                <span className="text-[9px] opacity-80">Be bold</span>
+            </div>
+        </div>
+        <div className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-bold">+{getDareScore()}</div>
       </Button>
     </div>
   );

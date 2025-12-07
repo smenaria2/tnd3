@@ -1,12 +1,12 @@
 
 
 import React from 'react';
-import { LogOut, MessageSquare, Video, AlertCircle, Timer as TimerIcon, Trophy } from 'lucide-react';
+import { LogOut, Video, AlertCircle, Trophy, Minimize2, Maximize2 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { TutorialTooltip } from '../TutorialTooltip';
-import { INTENSITY_LEVELS, QUESTIONS_PER_RANDOM_LEVEL } from '../../lib/constants';
+import { INTENSITY_LEVELS } from '../../lib/constants';
 import { cn } from '../../lib/utils';
-import { CallStatus, GameMode, IntensityLevel, PlayerRole, GameState } from '../../lib/types'; // Import GameState for scores type
+import { CallStatus, GameMode, IntensityLevel, PlayerRole, GameState } from '../../lib/types';
 
 interface GameHeaderProps {
   onExit: () => void;
@@ -17,20 +17,19 @@ interface GameHeaderProps {
   currentActiveIntensity: IntensityLevel;
   gameMode: GameMode;
   questionsAnsweredInCurrentLevel: number;
-  questionsPerRandomLevel: number; // Prop for QUESTIONS_PER_RANDOM_LEVEL
+  questionsPerRandomLevel: number;
   showIntensitySelector: boolean;
   setShowIntensitySelector: (show: boolean) => void;
   requestIntensityChange: (level: IntensityLevel) => void;
-  showChat: boolean;
-  setShowChat: (show: boolean) => void;
-  chatMessageCount: number;
-  scores: GameState['scores']; // Use GameState['scores'] type
+  scores: GameState['scores'];
   hostName: string;
   guestName: string;
   role: PlayerRole;
   handleStartCall: () => void;
   callStatus: CallStatus;
-  connectionStatus: 'connected' | 'disconnected' | 'reconnecting'; // New prop
+  connectionStatus: 'connected' | 'disconnected' | 'reconnecting';
+  isCallMinimized?: boolean;
+  toggleCallMinimize?: () => void;
 }
 
 export const GameHeader: React.FC<GameHeaderProps> = ({
@@ -46,16 +45,15 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
   showIntensitySelector,
   setShowIntensitySelector,
   requestIntensityChange,
-  showChat,
-  setShowChat,
-  chatMessageCount,
   scores,
   hostName,
   guestName,
   role,
   handleStartCall,
   callStatus,
-  connectionStatus, // Use new prop
+  connectionStatus,
+  isCallMinimized,
+  toggleCallMinimize
 }) => {
 
   const connectionStatusColor = 
@@ -73,6 +71,14 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
     connectionStatus === 'reconnecting' ? 'text-orange-500' :
     'text-red-600';
 
+  const handleVideoClick = () => {
+    if (callStatus === 'connected' && toggleCallMinimize) {
+      toggleCallMinimize();
+    } else {
+      handleStartCall();
+    }
+  };
+
   return (
     <header className="bg-white border-b border-slate-100 p-3 z-10 animate-fade-in">
       <div className="flex justify-between items-center mb-2">
@@ -87,10 +93,10 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
         </div>
         
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 mr-2">
             <div className={cn("w-2 h-2 rounded-full", connectionStatusColor, connectionStatus === 'connected' && 'animate-pulse')}></div>
             <span className={cn("text-[10px] font-bold uppercase", connectionStatusTextColor)}>
-              {isTestMode ? "Sandbox Mode" : connectionStatusText}
+              {isTestMode ? "Sandbox" : connectionStatusText}
             </span>
           </div>
 
@@ -109,12 +115,9 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
                 aria-label="Change intensity level"
               >
                 <span>{currentIntensityEmoji}</span>
-                <span className="capitalize">
+                <span className="capitalize hidden sm:inline">
                   {gameMode === 'random' ? currentIntensityLabel : INTENSITY_LEVELS.find(l => l.id === currentActiveIntensity)?.label || 'Friendly'}
                 </span>
-                {gameMode === 'random' && (
-                  <span className="ml-1 text-[10px] text-slate-500">({questionsAnsweredInCurrentLevel}/{questionsPerRandomLevel * 2} turns)</span>
-                )}
               </Button>
               {showIntensitySelector && (
                 <div 
@@ -141,18 +144,19 @@ export const GameHeader: React.FC<GameHeaderProps> = ({
             </div>
           </TutorialTooltip>
 
-          <TutorialTooltip content="Chat, send pics & start video calls" isVisible={!!isTestMode}>
+          <TutorialTooltip content="Start a video call" isVisible={!!isTestMode}>
             <Button 
-              onClick={() => setShowChat(!showChat)} 
+              onClick={handleVideoClick} 
+              disabled={callStatus === 'ringing'}
               variant="secondary"
               size="sm"
-              className="relative"
-              aria-label={showChat ? "Close chat" : `Open chat (${chatMessageCount} new messages)`}
-            >
-              <MessageSquare size={18} />
-              {chatMessageCount > 0 && !showChat && (
-                <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+              className={cn("bg-romantic-50 text-romantic-600 hover:bg-romantic-100 hover:text-romantic-700 border-romantic-200 transition-all", 
+                callStatus !== 'idle' && "bg-green-100 text-green-600 border-green-200",
+                callStatus === 'ringing' && "animate-pulse"
               )}
+              aria-label="Video Call"
+            >
+              {callStatus === 'connected' && isCallMinimized ? <Maximize2 size={20} /> : <Video size={20} />}
             </Button>
           </TutorialTooltip>
         </div>

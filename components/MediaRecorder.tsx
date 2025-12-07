@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Camera, Mic, Video, Square, RefreshCcw, Check, X, Loader } from 'lucide-react';
+import { Camera, Mic, Video, Square, RefreshCcw, Check, X, Loader, Upload } from 'lucide-react';
 import { blobToBase64 } from '../lib/utils';
 import { MediaType } from '../lib/types';
 import { Button } from './common/Button';
@@ -21,6 +21,7 @@ export const MediaRecorder: React.FC<MediaRecorderProps> = ({ onCapture, onCance
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Effect to attach stream to video element once it is rendered
   useEffect(() => {
@@ -120,6 +121,22 @@ export const MediaRecorder: React.FC<MediaRecorderProps> = ({ onCapture, onCance
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setIsLoading(true);
+      const base64 = await blobToBase64(file);
+      const type = file.type.startsWith('video') ? 'video' : file.type.startsWith('audio') ? 'audio' : 'photo';
+      setMode(type);
+      setPreview(base64);
+      setIsLoading(false);
+    }
+  };
+
+  const triggerFileUpload = () => {
+    fileInputRef.current?.click();
+  };
+
   const stopStream = () => {
     stream?.getTracks().forEach(track => track.stop());
     setStream(null);
@@ -139,6 +156,7 @@ export const MediaRecorder: React.FC<MediaRecorderProps> = ({ onCapture, onCance
     setIsLoading(false);
     mediaRecorderRef.current = null;
     chunksRef.current = [];
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // Render Preview
@@ -168,7 +186,7 @@ export const MediaRecorder: React.FC<MediaRecorderProps> = ({ onCapture, onCance
   }
 
   // Render Camera View
-  if (mode === 'photo' || (mode === 'video' && !preview)) {
+  if ((mode === 'photo' || mode === 'video') && !preview) {
     return (
       <div className="relative bg-black rounded-xl overflow-hidden flex flex-col items-center animate-fade-in">
         <video 
@@ -236,24 +254,40 @@ export const MediaRecorder: React.FC<MediaRecorderProps> = ({ onCapture, onCance
 
   // Initial Selection
   return (
-    <div className="relative grid grid-cols-3 gap-3 animate-fade-in">
+    <div className="relative grid grid-cols-4 gap-3 animate-fade-in">
       <Button onClick={onCancel} variant="ghost" size="sm" className="absolute top-2 right-2 text-slate-500 z-10" aria-label="Close media selector">
         <X size={16} />
       </Button>
+      
       <Button onClick={() => startCamera(false)} variant="outline" className="flex flex-col items-center gap-2 p-4 h-full" disabled={isLoading}>
         {isLoading && <Loader size={16} className="animate-spin" />}
         <Camera className="text-romantic-500" size={24} />
-        <span className="text-xs font-medium">Photo</span>
+        <span className="text-[10px] font-medium">Photo</span>
       </Button>
-      <Button onClick={startAudio} variant="outline" className="flex flex-col items-center gap-2 p-4 h-full" disabled={isLoading}>
-        {isLoading && <Loader size={16} className="animate-spin" />}
-        <Mic className="text-romantic-500" size={24} />
-        <span className="text-xs font-medium">Voice</span>
-      </Button>
+      
       <Button onClick={() => startCamera(true)} variant="outline" className="flex flex-col items-center gap-2 p-4 h-full" disabled={isLoading}>
         {isLoading && <Loader size={16} className="animate-spin" />}
         <Video className="text-romantic-500" size={24} />
-        <span className="text-xs font-medium">Video</span>
+        <span className="text-[10px] font-medium">Video</span>
+      </Button>
+      
+      <Button onClick={startAudio} variant="outline" className="flex flex-col items-center gap-2 p-4 h-full" disabled={isLoading}>
+        {isLoading && <Loader size={16} className="animate-spin" />}
+        <Mic className="text-romantic-500" size={24} />
+        <span className="text-[10px] font-medium">Voice</span>
+      </Button>
+
+      <Button onClick={triggerFileUpload} variant="outline" className="flex flex-col items-center gap-2 p-4 h-full" disabled={isLoading}>
+        <input 
+          type="file" 
+          ref={fileInputRef} 
+          className="hidden" 
+          accept="image/*,video/*,audio/*"
+          onChange={handleFileUpload}
+        />
+        {isLoading && <Loader size={16} className="animate-spin" />}
+        <Upload className="text-romantic-500" size={24} />
+        <span className="text-[10px] font-medium">Upload</span>
       </Button>
     </div>
   );

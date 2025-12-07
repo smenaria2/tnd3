@@ -70,6 +70,7 @@ export interface P2PMessage {
     | "CALL_ACCEPT"
     | "CALL_REJECT"
     | "CALL_END"
+    | "CALL_WINDOW_STATE"
     | "INTENSITY_REQUEST"
     | "INTENSITY_RESPONSE"
     | "RANDOM_LEVEL_UP" 

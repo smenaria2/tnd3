@@ -1,10 +1,12 @@
+
+
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useP2P } from '../hooks/useP2P';
 import { GameState, IntensityLevel, P2PMessage, PlayerRole, TurnRecord, ChatMessage, MediaType, CallStatus, GameMode } from '../lib/types';
-import { QUESTIONS, INTENSITY_LEVELS, QUESTIONS_PER_RANDOM_LEVEL, RANDOM_MODE_INTENSITY_ORDER } from '../lib/constants';
+import { QUESTIONS, INTENSITY_LEVELS, QUESTIONS_PER_RANDOM_LEVEL, RANDOM_MODE_INTENSITY_ORDER, RANDOM_EMOJIS } from '../lib/constants';
 import { formatTime, cn } from '../lib/utils';
 import { VideoCallOverlay } from './VideoCallOverlay';
-import { Send, Plus, X, ArrowDown, Copy, AlertCircle, RefreshCw, WifiOff } from 'lucide-react';
+import { Send, Plus, X, ArrowDown, Copy, RefreshCw, WifiOff, Sparkles, Share2 } from 'lucide-react';
 import type { MediaConnection } from 'peerjs';
 import { Button } from './common/Button';
 import { useToast } from '../hooks/useToast';
@@ -108,6 +110,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoStopped, setIsVideoStopped] = useState(false);
+  const [isCallMinimized, setIsCallMinimized] = useState(false);
 
   const currentCallRef = useRef<MediaConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -180,6 +183,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
     setCallStatus('idle');
     setIsMuted(false);
     setIsVideoStopped(false);
+    setIsCallMinimized(false);
     
     if (currentCallRef.current) {
       currentCallRef.current.close();
@@ -196,6 +200,13 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
     });
     call.on('close', () => handleEndCall(false));
   }, [handleEndCall]);
+
+  const triggerFloatingEmoji = useCallback((emoji: string) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    const x = Math.random() * 80 + 10;
+    setFloatingEmojis(prev => [...prev, { id, emoji, position: { x: window.innerWidth * (x/100), y: window.innerHeight - 100 }, startTime: Date.now() }]);
+    setTimeout(() => setFloatingEmojis(prev => prev.filter(e => e.id !== id)), 4000);
+  }, []);
 
   const handleP2PMessage = useCallback((msg: P2PMessage) => {
     switch (msg.type) {
@@ -215,15 +226,13 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
         if (!isUserAtBottom) addToast({ title: 'New Message', message: `${msg.payload.senderName} sent a message`, type: 'info' });
         break;
       case 'PING_EMOJI':
-         const id = Math.random().toString(36).substr(2, 9);
-         const x = Math.random() * 80 + 10;
-         setFloatingEmojis(prev => [...prev, { id, emoji: msg.payload.emoji, position: { x: window.innerWidth * (x/100), y: window.innerHeight - 100 }, startTime: Date.now() }]);
-         setTimeout(() => setFloatingEmojis(prev => prev.filter(e => e.id !== id)), 4000);
+         triggerFloatingEmoji(msg.payload.emoji);
          break;
       case 'CALL_OFFER': setCallStatus('ringing'); break;
       case 'CALL_ACCEPT': setCallStatus('connected'); break;
       case 'CALL_REJECT': setCallStatus('idle'); addToast({ title: 'Call Declined', message: 'Partner is busy.', type: 'error' }); break;
       case 'CALL_END': handleEndCall(false); break;
+      case 'CALL_WINDOW_STATE': setIsCallMinimized(msg.payload.minimized); break;
       case 'INTENSITY_REQUEST': setPendingIntensityRequest({ level: msg.payload.level, requester: role === 'host' ? gameState.guestName : gameState.hostName }); break;
       case 'INTENSITY_RESPONSE':
         if (msg.payload.accepted && msg.payload.level) {
@@ -238,7 +247,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
         }
         break;
     }
-  }, [gameState, role, addToast, handleEndCall, broadcastState, isUserAtBottom]);
+  }, [gameState, role, addToast, handleEndCall, broadcastState, isUserAtBottom, triggerFloatingEmoji]);
 
   const { status: p2pStatus, connectionStatus, error: p2pError, sendMessage, callPeer, retry } = useP2P({
     role, gameCode, playerName, onMessage: handleP2PMessage, onIncomingCall: handleIncomingStream, isTestMode
@@ -301,6 +310,12 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
     setInputMessage('');
     setShowMediaInput(false);
     if (!isTestMode) sendMessageRef.current({ type: 'CHAT_MESSAGE', payload: msg });
+  };
+
+  const sendPing = () => {
+    const emoji = RANDOM_EMOJIS[Math.floor(Math.random() * RANDOM_EMOJIS.length)];
+    triggerFloatingEmoji(emoji);
+    if (!isTestMode) sendMessageRef.current({ type: 'PING_EMOJI', payload: { emoji } });
   };
 
   const startTurn = (type: 'truth' | 'dare') => {
@@ -450,6 +465,20 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
     if (currentCallRef.current) { currentCallRef.current.close(); currentCallRef.current = null; }
   };
 
+  const handleToggleCallMinimize = () => {
+    const newState = !isCallMinimized;
+    setIsCallMinimized(newState);
+    if (!isTestMode) {
+      sendMessageRef.current({ type: 'CALL_WINDOW_STATE', payload: { minimized: newState } });
+    }
+  };
+
+  const copyLink = () => {
+    const link = `${window.location.origin}${window.location.pathname}?code=${gameCode}`;
+    navigator.clipboard.writeText(link);
+    addToast({ title: 'Link Copied', message: 'Share this with your partner!', type: 'success' });
+  };
+
   // --- Timeline Construction ---
   const timeline: TimelineItem[] = useMemo(() => {
     const chats = gameState.chatMessages.map(m => ({ type: 'chat' as const, data: m }));
@@ -517,9 +546,14 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
                 <div className="text-red-500 text-xs font-bold flex items-center gap-1">🚫 Timed Out</div>
               ) : (
                 <div className="bg-white/60 rounded p-2 text-sm text-slate-700">
-                  {turn.response}
-                  {turn.mediaData && <div className="mt-1 text-xs font-bold opacity-70">[{turn.mediaType} attached]</div>}
-                  {!turn.response && !turn.mediaData && <span className="italic opacity-50">No text response</span>}
+                  {turn.mediaData ? (
+                    <div className="mb-2 rounded-lg overflow-hidden bg-black/10 border border-white">
+                       {turn.mediaType === 'photo' && <img src={turn.mediaData} className="max-h-48 w-full object-cover" alt="response" />}
+                       {turn.mediaType === 'video' && <video src={turn.mediaData} controls className="max-h-48 w-full bg-black" />}
+                       {turn.mediaType === 'audio' && <audio src={turn.mediaData} controls className="w-full mt-2 mb-2 px-2" />}
+                    </div>
+                  ) : null}
+                  {turn.response ? <p>{turn.response}</p> : (!turn.mediaData && <span className="italic opacity-50">No text response</span>)}
                 </div>
               )}
             </div>
@@ -548,6 +582,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
         onToggleMute={() => { if(localStreamRef.current) { const t = localStreamRef.current.getAudioTracks()[0]; if(t) { t.enabled = !t.enabled; setIsMuted(!t.enabled); }}}}
         onToggleVideo={() => { if(localStreamRef.current) { const t = localStreamRef.current.getVideoTracks()[0]; if(t) { t.enabled = !t.enabled; setIsVideoStopped(!t.enabled); }}}}
         onEndCall={handleEndCall} onRejectCall={handleRejectCall} onAcceptCall={handleAcceptCall}
+        isMinimized={isCallMinimized} onToggleMinimize={handleToggleCallMinimize}
       />
 
       {/* --- HEADER --- */}
@@ -559,10 +594,11 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
         questionsPerRandomLevel={QUESTIONS_PER_RANDOM_LEVEL}
         showIntensitySelector={showIntensitySelector} setShowIntensitySelector={setShowIntensitySelector}
         requestIntensityChange={requestIntensityChange}
-        showChat={false} setShowChat={() => {}} chatMessageCount={0}
         scores={gameState.scores} hostName={gameState.hostName} guestName={gameState.guestName}
         role={role} handleStartCall={handleStartCall} callStatus={callStatus}
         connectionStatus={connectionStatus}
+        isCallMinimized={isCallMinimized}
+        toggleCallMinimize={handleToggleCallMinimize}
       />
 
       {/* --- TIMELINE --- */}
@@ -572,6 +608,24 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
         className="flex-1 overflow-y-auto p-4 space-y-1 scroll-smooth"
       >
         <div className="min-h-[20px]"></div> {/* Spacer for top */}
+        
+        {/* Waiting for Partner Card - Injected at top of stream if waiting */}
+        {gameState.guestName === 'Waiting...' && (
+          <div className="bg-white p-4 rounded-xl border-2 border-dashed border-romantic-300 mx-auto my-4 max-w-sm flex flex-col items-center gap-3 animate-pulse shadow-sm">
+            <div className="text-center">
+                <p className="font-bold text-romantic-600">Waiting for Partner...</p>
+                <p className="text-xs text-slate-500">Share this code to play!</p>
+            </div>
+            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg border border-slate-200">
+                <span className="font-mono font-bold tracking-widest text-lg">{gameCode}</span>
+                <Button onClick={() => { navigator.clipboard.writeText(gameCode); addToast({title:'Code Copied', message:'Shared to clipboard', type:'success'}) }} variant="ghost" size="sm" className="h-8 w-8 p-0 text-romantic-500"><Copy size={16}/></Button>
+            </div>
+             <Button onClick={copyLink} variant="secondary" size="sm" className="w-full text-xs gap-2">
+                <Share2 size={14}/> Share Link
+             </Button>
+          </div>
+        )}
+
         {timeline.map(renderTimelineItem)}
         
         {/* Connection Status Inline */}
@@ -588,11 +642,10 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
                     <RefreshCw size={14} /> Retry
                   </Button>
                </div>
-            ) : connectionStatus !== 'connected' ? (
+            ) : connectionStatus !== 'connected' && gameState.guestName !== 'Waiting...' ? (
                <div className="bg-slate-100 text-slate-500 border border-slate-200 px-4 py-2 rounded-full text-xs font-medium flex items-center gap-2 shadow-sm animate-pulse">
                   <span className="w-2 h-2 rounded-full bg-slate-400 animate-ping"></span>
-                  Waiting for partner... (Code: {gameCode})
-                  <Button onClick={() => navigator.clipboard.writeText(gameCode)} variant="ghost" size="sm" className="h-5 w-5 p-0 text-slate-400 hover:bg-slate-200"><Copy size={12}/></Button>
+                  Reconnecting...
                </div>
             ) : null}
           </div>
@@ -678,9 +731,15 @@ export const GameRoom: React.FC<GameRoomProps> = ({ role, gameCode, playerName, 
               onKeyDown={(e) => e.key === 'Enter' && sendChat(inputMessage)}
             />
           </div>
-          <Button onClick={() => sendChat(inputMessage)} disabled={!inputMessage.trim()} variant="primary" size="sm" className="p-3 rounded-full h-10 w-10 flex items-center justify-center">
-            <Send size={18} className="ml-0.5" />
-          </Button>
+          {inputMessage.trim() ? (
+            <Button onClick={() => sendChat(inputMessage)} variant="primary" size="sm" className="p-3 rounded-full h-10 w-10 flex items-center justify-center">
+              <Send size={18} className="ml-0.5" />
+            </Button>
+          ) : (
+            <Button onClick={sendPing} variant="secondary" size="sm" className="p-3 rounded-full h-10 w-10 flex items-center justify-center bg-slate-100 text-slate-400 hover:bg-romantic-100 hover:text-romantic-500">
+              <Sparkles size={18} />
+            </Button>
+          )}
         </div>
       </div>
     </div>
